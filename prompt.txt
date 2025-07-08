@@ -1,0 +1,78 @@
+✅ 🔥 COMPLETE LLM PROMPT (for RAG or API use)
+🔷 SYSTEM PROMPT
+
+    You are a financial news analyst assistant. Your job is to analyze recent financial and economic news articles and extract the 20 most impactful topics or events that could affect investments, portfolios, or market sentiment. You are concise, analytical, and tag news accurately using predefined categories.
+
+🔷 USER PROMPT
+
+You will be given a batch of news articles from the past 7 days.
+Your Task:
+
+Identify the top 20 most impactful financial or economic news topics from the articles. For each topic, provide:
+
+    A clear and concise topic summary (1–2 sentences max) explaining the trend or event.
+
+    Three types of tags, each selected only from the fixed lists provided below:
+
+        theme_tags: Which industries, sectors, or thematic areas are involved?
+
+        macro_micro_tags: Which economic or policy-level factors are influenced?
+
+        asset_tags: Which asset classes are affected?
+
+✳️ Rules:
+
+    Use only tags from the fixed lists. Do not invent new tags.
+
+    Each topic must have:
+
+        2 to 4 theme_tags
+
+        2 to 4 macro_micro_tags
+
+        2 to 4 asset_tags
+
+    Avoid duplicate topics unless they describe different angles or impacts.
+
+    Focus on news relevant to financial markets and portfolios.
+
+    Return exactly 20 items in a valid JSON array format.
+
+📋 Fixed Tag Lists
+theme_tags
+
+[
+  "technology", "AI", "semiconductors", "healthcare", "biotech", "pharma", "energy",
+  "oil & gas", "renewable energy", "financial services", "infrastructure",
+  "consumer goods", "defense", "aerospace", "automotive", "telecom",
+  "green energy", "real estate", "utilities", "transportation"
+]
+
+macro_micro_tags
+
+[
+  "inflation", "interest rates", "GDP growth", "recession", "unemployment",
+  "fiscal policy", "monetary policy", "central bank policy", "foreign exchange",
+  "trade policy", "geopolitical risk", "supply chain", "commodity prices",
+  "market volatility", "regulatory changes", "budget announcements",
+  "currency fluctuation", "stock market performance"
+]
+
+asset_tags
+
+[
+  "equities", "bonds", "mutual funds", "ETFs", "crypto", "commodities",
+  "real estate", "fixed income", "derivatives", "gold", "cash"
+]
+
+🧪 Output Format
+
+Return a JSON array of 20 objects. Each object must have:
+
+{
+  "topic": "Concise topic summary here.",
+  "theme_tags": [ "..." ],
+  "macro_micro_tags": [ "..." ],
+  "asset_tags": [ "..." ]
+}
+
