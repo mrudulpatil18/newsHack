@@ -1,0 +1,84 @@
+import com.azure.ai.openai.OpenAIClient;
+import com.azure.ai.openai.OpenAIClientBuilder;
+import com.azure.ai.openai.models.ChatMessage;
+import com.azure.ai.openai.models.ChatRole;
+import com.azure.ai.openai.models.ChatCompletionsOptions;
+import com.azure.core.credential.AzureKeyCredential;
+
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
+
+import com.itextpdf.kernel.pdf.PdfWriter;
+import com.itextpdf.kernel.pdf.PdfDocument;
+import com.itextpdf.layout.Document;
+import com.itextpdf.layout.element.Paragraph;
+
+import java.io.*;
+import java.nio.file.*;
+import java.util.*;
+
+public class ReportGenerator {
+
+    private static String extractTextFromPdf(String path) throws IOException {
+        try (PDDocument document = PDDocument.load(new File(path))) {
+            PDFTextStripper stripper = new PDFTextStripper();
+            return stripper.getText(document);
+        }
+    }
+
+    private static String readJson(String path) throws IOException {
+        return Files.readString(Path.of(path));
+    }
+
+    private static String generateReportFromLLM(String researchText, String clientData) {
+        OpenAIClient client = new OpenAIClientBuilder()
+            .endpoint("<AZURE_OPENAI_ENDPOINT>")
+            .credential(new AzureKeyCredential("<AZURE_OPENAI_KEY>"))
+            .buildClient();
+
+        String prompt = """
+            You are a financial assistant tasked with summarizing research and generating insights relevant to a client.
+            Research Content:
+            %s
+
+            Client Profile:
+            %s
+
+            Generate a visualized report that includes:
+            - A brief summary of research trends
+            - Matching trends to client goals
+            - Bullet points of actionable insights
+            - Chart suggestions (with labels, chart type, and data format)
+
+            Format output clearly with sections and suggestions for visuals.
+            """.formatted(researchText, clientData);
+
+        ChatMessage userMessage = new ChatMessage(ChatRole.USER).setContent(prompt);
+
+        ChatCompletionsOptions options = new ChatCompletionsOptions(Arrays.asList(userMessage));
+        return client.getChatCompletions("<DEPLOYMENT_NAME>", options)
+                .getChoices().get(0).getMessage().getContent();
+    }
+
+    private static void writeToPdf(String content, String outputPath) throws FileNotFoundException {
+        PdfWriter writer = new PdfWriter(outputPath);
+        PdfDocument pdf = new PdfDocument(writer);
+        Document document = new Document(pdf);
+        document.add(new Paragraph(content));
+        document.close();
+    }
+
+    public static void main(String[] args) throws IOException {
+        String researchPath = "input/research.pdf";
+        String clientJsonPath = "input/client.json";
+        String outputPath = "output/report.pdf";
+
+        String researchText = extractTextFromPdf(researchPath);
+        String clientData = readJson(clientJsonPath);
+
+        String reportContent = generateReportFromLLM(researchText, clientData);
+        writeToPdf(reportContent, outputPath);
+
+        System.out.println("PDF report generated at: " + outputPath);
+    }
+}
