@@ -1,0 +1,407 @@
+Test 1: ProducerService Test (JUnit 5, No External Config)
+
+java
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
+import org.springframework.kafka.listener.ContainerProperties;
+import org.springframework.kafka.test.context.EmbeddedKafka;
+import org.springframework.kafka.test.utils.KafkaTestUtils;
+import org.springframework.test.context.DirtiesContext;
+import org.springframework.test.context.TestPropertySource;
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.common.serialization.StringDeserializer;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+@SpringBootTest
+@EmbeddedKafka(
+    partitions = 1,
+    topics = {"topic-1", "topic-2"}
+)
+@TestPropertySource(properties = {
+    "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
+    "spring.kafka.producer.key-serializer=org.apache.kafka.common.serialization.StringSerializer",
+    "spring.kafka.producer.value-serializer=org.apache.kafka.common.serialization.StringSerializer",
+    "spring.kafka.producer.acks=1",
+    "spring.kafka.producer.retries=0",
+    "spring.kafka.consumer.key-deserializer=org.apache.kafka.common.serialization.StringDeserializer",
+    "spring.kafka.consumer.value-deserializer=org.apache.kafka.common.serialization.StringDeserializer",
+    "spring.kafka.consumer.group-id=test-producer-group",
+    "spring.kafka.consumer.auto-offset-reset=earliest",
+    "spring.kafka.properties.security.protocol=PLAINTEXT"
+})
+@DirtiesContext
+public class ProducerServiceTest {
+
+    private static final String ENRICHED_TOPIC = "topic-2";
+
+    @Autowired
+    private ProducerService producerService;
+
+    @Autowired
+    private EmbeddedKafkaBroker embeddedKafka;
+
+    private Consumer<String, String> consumer;
+
+    @BeforeEach
+    public void setUp() {
+        // Set up consumer to verify produced messages
+        Map<String, Object> consumerProps = KafkaTestUtils.consumerProps(
+            "test-producer-group",
+            "false",
+            embeddedKafka
+        );
+
+        DefaultKafkaConsumerFactory<String, String> consumerFactory =
+            new DefaultKafkaConsumerFactory<>(consumerProps);
+        
+        consumer = consumerFactory.createConsumer();
+        embeddedKafka.consumeFromAllEmbeddedTopics(consumer);
+    }
+
+    @AfterEach
+    public void tearDown() {
+        consumer.close();
+    }
+
+    @Test
+    public void shouldPublishEnrichedDataToTopic2() {
+        // Given - enriched data
+        EnrichedProductDefinition enrichedData = new EnrichedProductDefinition();
+        enrichedData.setLeadId("LEAD-001");
+        enrichedData.setProductName("Premium Plan");
+        enrichedData.setEnrichedAt(System.currentTimeMillis());
+
+        // When - produce to topic-2
+        producerService.sendMessage(
+            ENRICHED_TOPIC,
+            enrichedData.getLeadId(),
+            enrichedData.toString()
+        );
+
+        // Then - verify message was published correctly
+        ConsumerRecord<String, String> record =
+            KafkaTestUtils.getSingleRecord(consumer, ENRICHED_TOPIC);
+
+        assertEquals("LEAD-001", record.key());
+        assertThat(record.value()).contains("Premium Plan");
+    }
+
+    @Test
+    public void shouldPublishMultipleEnrichedMessages() {
+        // When - produce multiple messages
+        for (int i = 1; i <= 3; i++) {
+            EnrichedProductDefinition enriched = new EnrichedProductDefinition();
+            enriched.setLeadId("LEAD-" + String.format("%03d", i));
+            enriched.setProductName("Product-" + i);
+
+            producerService.sendMessage(
+                ENRICHED_TOPIC,
+                enriched.getLeadId(),
+                enriched.toString()
+            );
+        }
+
+        // Then - verify all messages
+        ConsumerRecords<String, String> records = KafkaTestUtils.getRecords(consumer);
+        assertThat(records.count()).isGreaterThanOrEqualTo(3);
+    }
+
+    @Test
+    public void shouldPreserveMessageKeyAndValue() {
+        // Given
+        String leadId = "LEAD-12345";
+        String enrichedValue = "enriched-data-with-all-fields";
+
+        // When
+        producerService.sendMessage(ENRICHED_TOPIC, leadId, enrichedValue);
+
+        // Then
+        ConsumerRecord<String, String> record =
+            KafkaTestUtils.getSingleRecord(consumer, ENRICHED_TOPIC);
+
+        assertThat(record.key()).isEqualTo(leadId);
+        assertThat(record.value()).isEqualTo(enrichedValue);
+    }
+}
+
+Test 2: ConsumerService Test (JUnit 5, No External Config)
+
+java
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.listener.KafkaListenerEndpointRegistry;
+import org.springframework.kafka.test.context.EmbeddedKafka;
+import org.springframework.kafka.test.utils.ContainerTestUtils;
+import org.springframework.test.context.DirtiesContext;
+import org.springframework.test.context.TestPropertySource;
+import org.awaitility.Awaitility;
+
+import java.util.concurrent.TimeUnit;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+@SpringBootTest
+@EmbeddedKafka(
+    partitions = 1,
+    topics = {"topic-1", "topic-2"}
+)
+@TestPropertySource(properties = {
+    "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
+    "spring.kafka.consumer.key-deserializer=org.apache.kafka.common.serialization.StringDeserializer",
+    "spring.kafka.consumer.value-deserializer=org.apache.kafka.common.serialization.StringDeserializer",
+    "spring.kafka.consumer.group-id=test-consumer-group",
+    "spring.kafka.consumer.auto-offset-reset=earliest",
+    "spring.kafka.producer.key-serializer=org.apache.kafka.common.serialization.StringSerializer",
+    "spring.kafka.producer.value-serializer=org.apache.kafka.common.serialization.StringSerializer",
+    "spring.kafka.producer.acks=1",
+    "spring.kafka.properties.security.protocol=PLAINTEXT"
+})
+@DirtiesContext
+public class ConsumerServiceTest {
+
+    private static final String BASE_TOPIC = "topic-1";
+
+    @Autowired
+    private KafkaTemplate<String, String> kafkaTemplate;
+
+    @Autowired
+    private EmbeddedKafkaBroker embeddedKafka;
+
+    @Autowired
+    private KafkaListenerEndpointRegistry kafkaListenerEndpointRegistry;
+
+    @Autowired
+    private ConsumerService consumerService;
+
+    @BeforeEach
+    public void setUp() {
+        // Wait for listener containers to be ready before sending messages
+        kafkaListenerEndpointRegistry.getListenerContainers()
+            .forEach(container ->
+                ContainerTestUtils.waitForAssignment(
+                    container,
+                    embeddedKafka.getPartitionsPerTopic()
+                )
+            );
+    }
+
+    @Test
+    public void shouldConsumeAndProcessMessageFromTopic1() {
+        // Given - base data to send
+        String leadId = "LEAD-001";
+        String baseData = "{\"leadId\":\"" + leadId + "\",\"name\":\"John Doe\"}";
+
+        // When - send message to topic-1
+        kafkaTemplate.send(BASE_TOPIC, leadId, baseData);
+
+        // Then - verify consumer processed it
+        Awaitility.await()
+            .atMost(5, TimeUnit.SECONDS)
+            .pollInterval(java.time.Duration.ofMillis(100))
+            .untilAsserted(() -> {
+                assertThat(consumerService.getProcessedLeadIds())
+                    .contains(leadId);
+            });
+    }
+
+    @Test
+    public void shouldEnrichDataAndProduceToTopic2() {
+        // Given
+        String leadId = "LEAD-002";
+        String baseData = "{\"leadId\":\"" + leadId + "\",\"email\":\"john@example.com\"}";
+
+        // When - send message
+        kafkaTemplate.send(BASE_TOPIC, leadId, baseData);
+
+        // Then - verify enriched message was produced
+        Awaitility.await()
+            .atMost(5, TimeUnit.SECONDS)
+            .pollInterval(java.time.Duration.ofMillis(100))
+            .untilAsserted(() -> {
+                List<String> enrichedMessages = consumerService.getEnrichedMessages();
+                assertThat(enrichedMessages)
+                    .isNotEmpty()
+                    .anyMatch(msg -> msg.contains(leadId));
+            });
+    }
+
+    @Test
+    public void shouldHandleMultipleMessagesInSequence() {
+        // When - send 3 messages
+        for (int i = 1; i <= 3; i++) {
+            String leadId = "LEAD-" + String.format("%03d", i);
+            String data = "{\"leadId\":\"" + leadId + "\",\"index\":" + i + "}";
+            kafkaTemplate.send(BASE_TOPIC, leadId, data);
+        }
+
+        // Then - verify all were processed
+        Awaitility.await()
+            .atMost(10, TimeUnit.SECONDS)
+            .pollInterval(java.time.Duration.ofMillis(100))
+            .untilAsserted(() -> {
+                assertThat(consumerService.getProcessedLeadIds())
+                    .hasSize(3)
+                    .contains("LEAD-001", "LEAD-002", "LEAD-003");
+            });
+    }
+}
+
+Test 3: End-to-End Integration Test (JUnit 5, No External Config)
+
+java
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.listener.KafkaListenerEndpointRegistry;
+import org.springframework.kafka.test.context.EmbeddedKafka;
+import org.springframework.kafka.test.utils.ContainerTestUtils;
+import org.springframework.test.context.DirtiesContext;
+import org.springframework.test.context.TestPropertySource;
+import org.awaitility.Awaitility;
+
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+@SpringBootTest
+@EmbeddedKafka(
+    partitions = 1,
+    topics = {"topic-1", "topic-2"}
+)
+@TestPropertySource(properties = {
+    "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
+    "spring.kafka.consumer.key-deserializer=org.apache.kafka.common.serialization.StringDeserializer",
+    "spring.kafka.consumer.value-deserializer=org.apache.kafka.common.serialization.StringDeserializer",
+    "spring.kafka.consumer.group-id=test-integration-group",
+    "spring.kafka.consumer.auto-offset-reset=earliest",
+    "spring.kafka.producer.key-serializer=org.apache.kafka.common.serialization.StringSerializer",
+    "spring.kafka.producer.value-serializer=org.apache.kafka.common.serialization.StringSerializer",
+    "spring.kafka.producer.acks=1",
+    "spring.kafka.properties.security.protocol=PLAINTEXT"
+})
+@DirtiesContext
+public class ProducerConsumerIntegrationTest {
+
+    private static final String BASE_TOPIC = "topic-1";
+    private static final String ENRICHED_TOPIC = "topic-2";
+
+    @Autowired
+    private ProducerService producerService;
+
+    @Autowired
+    private ConsumerService consumerService;
+
+    @Autowired
+    private KafkaTemplate<String, String> kafkaTemplate;
+
+    @Autowired
+    private EmbeddedKafkaBroker embeddedKafka;
+
+    @Autowired
+    private KafkaListenerEndpointRegistry kafkaListenerEndpointRegistry;
+
+    @BeforeEach
+    public void setUp() {
+        kafkaListenerEndpointRegistry.getListenerContainers()
+            .forEach(container ->
+                ContainerTestUtils.waitForAssignment(
+                    container,
+                    embeddedKafka.getPartitionsPerTopic()
+                )
+            );
+    }
+
+    @Test
+    public void shouldConsumeFromTopic1AndProduceEnrichedDataToTopic2() {
+        // Given - simulate base data coming into topic-1
+        String leadId = "LEAD-INTEGRATION-001";
+        String baseData = "{\"leadId\":\"" + leadId + "\",\"source\":\"api\"}";
+
+        // When - consumer receives and enriches via async APIs
+        kafkaTemplate.send(BASE_TOPIC, leadId, baseData);
+
+        // Then - enriched data should be produced to topic-2
+        Awaitility.await()
+            .atMost(5, TimeUnit.SECONDS)
+            .pollInterval(java.time.Duration.ofMillis(100))
+            .untilAsserted(() -> {
+                // Verify consumer processed the message
+                assertThat(consumerService.getProcessedLeadIds())
+                    .contains(leadId);
+
+                // Verify enriched data was produced
+                List<String> enrichedMessages = consumerService.getEnrichedMessages();
+                assertThat(enrichedMessages)
+                    .isNotEmpty()
+                    .anyMatch(msg -> msg.contains(leadId));
+            });
+    }
+
+    @Test
+    public void shouldHandleEndToEndPipelineWithMultipleMessages() {
+        // When - send multiple base messages
+        int messageCount = 5;
+        for (int i = 1; i <= messageCount; i++) {
+            String leadId = "LEAD-" + String.format("%03d", i);
+            String data = "{\"leadId\":\"" + leadId + "\",\"iteration\":" + i + "}";
+            kafkaTemplate.send(BASE_TOPIC, leadId, data);
+        }
+
+        // Then - verify entire pipeline processed all messages
+        Awaitility.await()
+            .atMost(10, TimeUnit.SECONDS)
+            .pollInterval(java.time.Duration.ofMillis(100))
+            .untilAsserted(() -> {
+                // All messages processed by consumer
+                assertThat(consumerService.getProcessedLeadIds())
+                    .hasSize(messageCount);
+
+                // All enriched versions produced
+                List<String> enrichedMessages = consumerService.getEnrichedMessages();
+                assertThat(enrichedMessages)
+                    .hasSize(messageCount);
+            });
+    }
+
+    @Test
+    public void shouldHandleAsyncEnrichmentForMultipleAPICalls() {
+        // When - send message that will trigger 4 async API calls
+        String leadId = "LEAD-ASYNC-001";
+        String baseData = "{\"leadId\":\"" + leadId + "\",\"needsEnrichment\":true}";
+
+        kafkaTemplate.send(BASE_TOPIC, leadId, baseData);
+
+        // Then - verify all async calls completed and enrichment finished
+        Awaitility.await()
+            .atMost(10, TimeUnit.SECONDS)
+            .pollInterval(java.time.Duration.ofMillis(200))
+            .untilAsserted(() -> {
+                assertThat(consumerService.getProcessedLeadIds())
+                    .contains(leadId);
+
+                // Verify enriched data contains results from async calls
+                List<String> enrichedMessages = consumerService.getEnrichedMessages();
+                assertThat(enrichedMessages)
+                    .isNotEmpty()
+                    .anyMatch(msg -> msg.contains(leadId) && 
+                                     msg.contains("api1") && 
+                                     msg.contains("api2") &&
+                                     msg.contains("api3") &&
+                                     msg.contains("api4"));
+            });
+    }
+}
